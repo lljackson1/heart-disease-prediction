@@ -1,0 +1,385 @@
+---
+title: "S&DS 2300 Heart Disease Prediction Project"
+author: "Logan Jackson, Yale University Class of 2028"
+date: "2026-05-02"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 8, fig.height = 5)
+```
+
+# Introduction
+
+*Cardiovascular disease is the leading cause of death globally, making early identification of patients at risk a major clinical priority. This report analyzes a dataset of 918 patients across five international medical institutions. Clinical measurements are analyzed to identify predictors of heart disease. In descriptive analysis, regression modeling, and binary logistic regression, we examine relationships between patient characteristics and maximum heart rate and heart disease presence.*
+
+# Data
+
+*The following variables are drawn from the Heart Failure Prediction Dataset sourced from Kaggle (fedesoriano, 2021), containing 746 patients after cleaning.*
+
+```{r}
+vars <- data.frame(
+  Variable = c("Age", "Sex", "ChestPainType", "RestingBP", "Cholesterol", 
+               "FastingBS", "RestingECG", "MaxHR", "ExerciseAngina", "Oldpeak", 
+               "ST_Slope", "HeartDisease"),
+  Type = c("Continuous", "Categorical", "Categorical", "Continuous", "Continuous",
+           "Categorical", "Categorical", "Continuous", "Categorical", "Continuous",
+           "Categorical", "Categorical"),
+  Description = c("Patient age (years)",
+                  "Patient sex (M = Male, F = Female)",
+                  "Chest pain type (ASY, ATA, NAP, TA)",
+                  "Resting blood pressure (mm Hg)",
+                  "Serum cholesterol (mm/dl)",
+                  "Fasting blood sugar > 120 mg/dl (1 = Yes, 0 = No)",
+                  "Resting ECG results (Normal, ST, LVH)",
+                  "Maximum heart rate achieved (bpm)",
+                  "Exercise-induced angina (Y/N)",
+                  "ST depression induced by exercise",
+                  "Slope of peak exercise ST segment (Up, Flat, Down)",
+                  "Heart disease present (1 = Yes, 0 = No)")
+)
+knitr::kable(vars, format = "pandoc")
+```
+
+# Data Inspection and Cleaning
+
+
+```{r, results='hide'}
+heart <- read.csv("heart.csv")
+head(heart, 3)
+str(heart)
+summary(heart)
+names(heart)
+```
+
+*All categorical variables are stored as `chr` and were thus converted to factors for use in subsequent analysis.*
+
+```{r}
+# Convert categoricals to factors
+heart$Sex <- as.factor(heart$Sex)
+heart$ChestPainType <- as.factor(heart$ChestPainType)
+heart$FastingBS <- as.factor(heart$FastingBS)
+heart$RestingECG <- as.factor(heart$RestingECG)
+heart$ExerciseAngina <- as.factor(heart$ExerciseAngina)
+heart$ST_Slope <- as.factor(heart$ST_Slope)
+heart$HeartDisease <- as.factor(heart$HeartDisease)
+```
+
+
+```{r}
+# Cholesterol of 0 is physiologically impossible — treat as missing
+heart$Cholesterol[heart$Cholesterol == 0] <- NA
+
+# RestingBP of 0 is also impossible
+heart$RestingBP[heart$RestingBP == 0] <- NA
+
+# Check how many NAs we now have
+colSums(is.na(heart))
+```
+
+*There were 172 cholesterol values and 1 `RestingBP` value of 0. These values are physiologically impossible and were thus replaced with `NA`.*
+
+```{r, results='hide'}
+heart_clean <- na.omit(heart)
+nrow(heart)
+nrow(heart_clean)
+str(heart_clean)
+```
+
+*After removing rows with missing values, the final working dataset `heart_clean` contains 746 observations, down from the original 918. You might notice that only 172 rows were removed and not 173 (172 in Cholesterol and 1 in `RestingBP`). This is because one patient had missing values in both variables, and na.omit() removes the entire row regardless of how many `NA`'s it contains, so 173 values were replaced with `NA`, which ended up being 172 rows. The dataset required no text manipulation, as variable names and category labels were already consistently formatted upon import.*
+
+# Descriptive Plots
+
+## Histogram
+
+```{r}
+library(ggplot2)
+
+ggplot(heart_clean, aes(x = Cholesterol)) +
+  geom_histogram(binwidth = 20, fill = "#0099F8", color = "black") +
+  labs(
+    title = "Distribution of Serum Cholesterol",
+    x = "Cholesterol (mm/dl)",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+*The distribution of serum cholesterol is right-skewed, most patients fall between 150 and 350 mm/dl. A small number of extreme values above 500 mm/dl pull the tail to the right. This skew is worth keeping in mind for later regression analysis, where a log transformation of cholesterol might be appropriate.*
+
+## Box Plots
+
+```{r}
+ggplot(heart_clean, aes(x = HeartDisease, y = MaxHR, fill = HeartDisease)) +
+  stat_boxplot(geom = "errorbar", width = 0.25) +
+  geom_boxplot(alpha = 1, outlier.colour = "red", outlier.shape = 16) +
+  scale_fill_manual(values = c("darkturquoise", "brown1")) +
+  labs(
+    title = "Maximum Heart Rate by Heart Disease Status",
+    subtitle = "Patients without heart disease tend to achieve higher maximum heart rates",
+    x = "Heart Disease (0 = No, 1 = Yes)",
+    y = "Maximum Heart Rate (bpm)",
+    fill = "Heart Disease"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "gray40", size = 10),
+    legend.position = "none"
+  )
+```
+
+*Patients without heart disease (group 0) tend to have higher maximum heart rates, with a median of approximately 150 bpm, compared to a median of approximately 130 bpm for patients with heart disease (group 1). This suggests maximum heart rate could be a useful predictor of heart disease, which we'll explore further in the regression analysis.*
+
+## Scatter Plot
+
+```{r, message=FALSE}
+ggplot(heart_clean, aes(x = Age, y = MaxHR, color = HeartDisease)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c("darkturquoise", "brown1"),
+                     labels = c("No Heart Disease", "Heart Disease")) +
+  labs(
+    title = "Age vs Maximum Heart Rate by Heart Disease Status",
+    x = "Age (years)",
+    y = "Maximum Heart Rate (bpm)",
+    color = "Heart Disease"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    legend.position = "right"
+  )
+```
+
+*Maximum heart rate shows a clear negative relationship with age for both groups: As age increases, maximum heart rate tends to decrease. Patients without heart disease (blue) generally achieve higher maximum heart rates across all ages compared to those with heart disease (red), with the gap being more pronounced in younger patients. Both regression lines have similar slopes, suggesting the effect of age on maximum heart rate is likely comparable regardless of heart disease status.*
+
+# Basic Tests
+
+## Correlation Test
+
+```{r}
+cor.test(heart_clean$Age, heart_clean$MaxHR)
+```
+
+*There is a statistically significant, moderate negative correlation between age and maximum heart rate (r = -0.38, p < 0.001), which indicates that as age increases, maximum heart rate tends to decrease. This is consistent with the pattern we observed in the scatterplot above.*
+
+## T-Test
+
+```{r}
+t.test(Cholesterol ~ HeartDisease, data = heart_clean)
+```
+
+*The Welch two-sample t-test identified the difference in mean cholesterol between patients with and without heart disease as statistically significant (t = -2.83, df = 712.54, p = 0.005). The mean was higher in the patients with heart disease (251.1 mm/dl) than in those without (238.8 mm/dl).*
+
+## Bootstrap
+
+```{r}
+hd_MaxHR <- heart_clean$MaxHR[heart_clean$HeartDisease == 1]
+
+n <- length(hd_MaxHR)
+n_samp <- 10000
+bmeans <- rep(NA, n_samp)
+set.seed(123)
+
+for(i in 1:n_samp){
+  s <- sample(hd_MaxHR, n, replace = TRUE)
+  bmeans[i] <- mean(s)
+}
+
+ci_boot <- quantile(bmeans, c(.025, .975))
+ci_t <- t.test(hd_MaxHR)$conf.int
+
+hist(bmeans, col = "#0099F8", 
+     main = "Bootstrapped Sample Means of MaxHR (Heart Disease Patients)", 
+     xlab = "Maximum Heart Rate (bpm)", breaks = 50)
+abline(v = ci_boot, lwd = 3, col = "red")
+abline(v = ci_t, lwd = 3, col = "green", lty = 2)
+legend("topright", c("Theoretical CI", "Bootstrap CI"), 
+       lwd = 3, col = c("green", "red"), lty = c(2, 1))
+
+```
+
+```{r, results='hide'}
+round(ci_boot, 4)
+round(ci_t, 4)
+```
+
+*The bootstrapped 95% CI for mean maximum heart rate among heart disease patients was (128.239, 132.882) bpm, which is nearly identical to the theoretical t-test CI (128.226, 132.875) bpm. Given the large sample size, this is expected because with a sample this large, the Central Limit Theorem ensures the sampling distribution of the mean is approximately normal, so the two methods converge.*
+
+## Permutation Test
+
+```{r}
+# Actual observed difference in means
+actualdiff <- mean(heart_clean$MaxHR[heart_clean$HeartDisease == "1"]) - 
+              mean(heart_clean$MaxHR[heart_clean$HeartDisease == "0"])
+
+set.seed(123)
+N <- 10000
+diffvals <- rep(NA, N)
+
+for(i in 1:N){
+  fakeHD <- sample(heart_clean$HeartDisease)
+  diffvals[i] <- mean(heart_clean$MaxHR[fakeHD == "1"]) - 
+                 mean(heart_clean$MaxHR[fakeHD == "0"])
+}
+
+# Histogram with actual difference line and p-value
+hist(diffvals, col = "#0099F8", 
+     main = "Permuted Differences in Mean MaxHR by Heart Disease Status",
+     xlab = "Difference in Mean MaxHR (bpm)", breaks = 50, xlim = c(-20,10))
+abline(v = actualdiff, col = "red", lwd = 3)
+text(actualdiff - 0.55, 600, paste("Actual Diff =", round(actualdiff, 2)), srt = 90)
+mtext(paste("Two-sided permutation p-value = ", 
+      round(mean(abs(diffvals) >= abs(actualdiff)), 20)),
+      side = 3, line = 0, cex = 0.8)
+```
+
+*A two-sided permutation test was conducted to assess whether the observed difference in mean maximum heart rate between heart disease groups (-18.51 bpm) could have occurred by chance. Across the 10,000 permutations, none produced a difference nearly as extreme as the observed value, yielding a permutation p-value \< 0.0001, strong evidence that the difference in mean maximum heart rate between patients with and without heart disease is statistically significant.*
+
+# Multiple Regression
+
+## Description of plan
+
+*To predict maximum heart rate, a multiple regression model will be fit using all available predictors as candidate variables: `Age`, `Sex`, `ChestPainType`, `RestingBP`, `Cholesterol`, `FastingBS`, `RestingECG`, `ExerciseAngina`, `Oldpeak`, `ST_Slope`, and `HeartDisease`. Manual backwards stepwise regression will be used, the least significant predictor will be removed one at a time until all remaining predictors are significant. For non-significant categorical variables with more than two levels, an ANOVA F-test will be used to test whether the variable as a whole should or should not be removed.*
+
+## Backwards Stepwise Regression
+
+```{r, results='hide'}
+model_full <- lm(MaxHR ~ Age + Sex + ChestPainType + RestingBP + Cholesterol + 
+                 FastingBS + RestingECG + ExerciseAngina + Oldpeak + ST_Slope + 
+                 HeartDisease, data = heart_clean)
+summary(model_full)
+```
+
+*Starting from the full model, predictors were removed one at a time in the following order by highest p-value: `RestingBP` (p = 0.975), `HeartDisease` (p = 0.717), `FastingBS` (p = 0.590), `Cholesterol` (p = 0.397), and `Oldpeak` (p = 0.310). For `ST_Slope`, an ANOVA F-test confirmed it should be retained as a whole (p < 0.001) despite its individual level p-values being non-significant, and this is further supported by a lower AIC in the model with `ST_Slope` (AIC = 6617.43) compared to the model without it (AIC = 6634.91). The final model summary below.*
+
+## Final Model
+
+```{r}
+model6 <- lm(MaxHR ~ Age + Sex + ChestPainType + 
+             RestingECG + ExerciseAngina + ST_Slope, 
+             data = heart_clean)
+summary(model6)
+```
+
+```{r, results='hide'}
+model7 <- lm(MaxHR ~ Age + Sex + ChestPainType + 
+             RestingECG + ExerciseAngina, 
+             data = heart_clean)
+anova(model6, model7)
+AIC(model6)
+AIC(model7)
+```
+
+## Results & Discussion
+
+*Five predictors were removed during backwards stepwise regression: `RestingBP`, `HeartDisease`, `FastingBS`, `Cholesterol`, and `Oldpeak`, in that order. The final model retained `Age`, `Sex`, `ChestPainType`, `RestingECG`, `ExerciseAngina`, and `ST_Slope` as predictors (R² = 0.328, Adjusted R² = 0.319), explaining approximately 32.8% of the variance in maximum heart rate. A one year increase in age is generally associated with a decrease of approximately 0.77 bpm in maximum heart rate (β = -0.766, p < 0.001). Male patients have lower maximum heart rates than female patients (β = -3.57, p = 0.045). All chest pain types show significantly higher maximum heart rates compared to the asymptomatic reference group, and patients with exercise-induced angina have significantly lower maximum heart rates (β = -6.80, p < 0.001). Though its individual level p-values were non-significant, `ST_Slope` was retained based on a significant ANOVA F-test (p < 0.001).*
+
+## Residual Plots
+
+```{r, message=FALSE}
+library(car)
+```
+
+
+```{r}
+myResPlots2 <- function(model, label){
+  
+  #Normal quantile plot of studentized residuals
+  qqp(rstudent(model), pch = 19, main = paste("NQ Plot of Studentized Residuals,", label))
+  
+  #plot of fitted vs. studentized residuals
+  plot(rstudent(model) ~ model$fitted.values, pch = 19, col = 'red', xlab = "Fitted Values", ylab = "Studentized Residuals",
+     main = paste("Fits vs. Studentized Residuals,", label))
+  abline(h = 0, lwd = 3)
+  abline(h = c(2,-2), lty = 2, lwd = 2, col="blue")
+  abline(h = c(3,-3), lty = 2, lwd = 2, col="green")
+}
+
+myResPlots2(model6, "Final MaxHR Regression Model")
+```
+
+*The fits vs. residuals plot shows residuals randomly scattered around zero with no obvious pattern or megaphone effect, suggesting the linearity and constant variance assumptions are reasonably satisfied. Only 3 points have studentized residuals exceeding 3, indicating very few extreme outliers. The Normal Quantile plot shows the residuals follow the normal line closely through the middle of the distribution, with minor deviations at both ends indicating slight departures from normality. Overall we can consider the model assumptions to be reasonably met.*
+
+```{r}
+library(MASS)
+boxcox(model6)
+```
+
+## MISC
+
+*Prior to modeling, the distribution of serum cholesterol was noted to be right-skewed, suggesting a log transformation might be appropriate. However, cholesterol was removed during backwards stepwise regression due to its lack of significance as a predictor of `MaxHR`, so no transformation was ultimately necessary. A Box-Cox analysis of the final model indicated that λ = 1 (no transformation) fell outside the 95% confidence interval, suggesting a power transformation of `MaxHR` with λ ≈ 1.5 may be appropriate. A transformed model was fit using `MaxHR^1.5` as the response variable, which improved normality of the residuals. However, the transformation introduced slight heteroskedasticity in the fits vs. residuals plot that was not present in the original model. Given that heteroskedasticity is a more consequential violation of regression assumptions than mild non-normality, and that the large sample size (n = 746) provides robustness to minor departures from normality, and that `MaxHR` is considerably easier to interpret than `MaxHR^1.5` the untransformed model was retained as the final model.*
+
+# Analysis - Logistic Regression
+
+```{r, results='hide'}
+logmod_full <- glm(HeartDisease ~ Age + Sex + ChestPainType + RestingBP + 
+                   Cholesterol + FastingBS + RestingECG + ExerciseAngina + 
+                   Oldpeak + ST_Slope, data = heart_clean, family = binomial)
+summary(logmod_full)
+```
+
+*Starting from the full model, predictors were removed in the following order: `RestingECG` (p = 0.631), `FastingBS` (p = 0.363), `Cholesterol` (p = 0.163), and `RestingBP` (p = 0.058). The final model summary is shown below.*
+
+## Final Model
+
+```{r}
+logmod5 <- glm(HeartDisease ~ Age + Sex + ChestPainType + 
+               ExerciseAngina + Oldpeak + ST_Slope, 
+               data = heart_clean, family = binomial)
+summary(logmod5)
+
+logmod5_noST <- glm(HeartDisease ~ Age + Sex + ChestPainType + 
+                    ExerciseAngina + Oldpeak, 
+                    data = heart_clean, family = binomial)
+```
+
+```{r, results='hide'}
+anova(logmod5_noST, logmod5, test = "Chisq")
+
+logmod_full$aic
+logmod5$aic
+```
+
+```{r, message=FALSE}
+library(questionr)
+odds.ratio(logmod5)
+
+devtab <- anova(logmod5, test = "Chisq")
+devtab
+
+```
+
+## Results & Discussion
+
+*A binary logistic regression model was applied to predict the presence of heart disease among patients. We then applied manual backward stepwise regression to remove `RestingECG`, `FastingBS`, `Cholesterol`, `RestingBP` in that order, and obtained `Age`, `Sex`, `ChestPainType`, `ExerciseAngina`, `Oldpeak`, and `ST_Slope` as significant predictors. AIC further supports the model selection, since the final model (AIC=510.74) has a lower value than the full model (AIC=513.59), confirming that the removed predictors weren't contributing meaningfully to model fit. All predictors in the final model are significant at the α = 0.05 level, and `ST_Slope` was retained based on a significant deviance test (p < 0.001) despite its individual level p-values being only marginally significant.*
+
+*The deviance table confirms that each predictor in the final model contributes significantly to the model (all p < 0.001). The null deviance was 1032.63, which dropped to 490.74 when all significant predictors were included. This reduction of 541.89 shows that the model explains substantially more variation in heart disease status than the null model.*
+
+*For odds ratios, men have approximately 6 times higher odds than women to have heart disease (OR = 6.00, p < 0.001). For every one year increase in age, the odds of heart disease increase by 4% (OR = 1.04, p = 0.003). People who experience angina when exercising are about 2.5 times more likely to have heart disease (OR = 2.55, p < 0.001). For each unit increase in `Oldpeak` the odds of heart disease increase by 1.52 (OR = 1.52, p = 0.002). All types of chest pain have significantly lower odds of heart disease than the asymptomatic reference group (OR Range = 0.19 - 0.22). Interestingly, this counter intuitive result is similar to a well known clinical observation: asymptomatic patients tend to have worse underlying heart disease, precisely because they have no warning symptoms. A flat ST slope is associated with 3.45 times the odds of heart disease (OR = 3.45, p = 0.015) when compared to the down-sloping reference level, whereas an up-sloping ST slope is associated with lower odds (OR = 0.28, p = 0.021).*
+
+```{r, results='hide'}
+heart_clean[heart_clean$Sex == "M" & 
+            heart_clean$ChestPainType == "ASY" & 
+            heart_clean$ExerciseAngina == "Y" & 
+            heart_clean$ST_Slope == "Flat" &
+            heart_clean$HeartDisease == "1",][1,]
+```
+
+```{r, results='hide'}
+predict(logmod5, newdata = heart_clean[heart_clean$Sex == "M" & 
+            heart_clean$ChestPainType == "ASY" & 
+            heart_clean$ExerciseAngina == "Y" & 
+            heart_clean$ST_Slope == "Flat" &
+            heart_clean$HeartDisease == "1",][1,], type = "response")
+```
+
+*To demonstrate the model’s predictive power, consider patient 9, a 37-year-old man with asymptomatic chest pain, angina on exertion, and flat ST slope. The model predicts there is a 92% chance he has heart disease, which is consistent with his actual diagnosis.*
+
+# Conclusions
+
+*In this analysis, clinical predictors of heart disease were examined using data from 746 patients. Descriptive analysis suggested that heart disease patients have generally lower maximum heart rates across all ages. Multiple regression showed that age, sex, type of chest pain, ECG results, exercise induced angina, and ST slope were significant predictors of maximum heart rate (R² = 0.328). Binary logistic regression analysis showed similar predictors of heart disease presence, with male sex, asymptomatic chest pain, exercise induced angina, and flat ST slope being associated with significantly increased odds of heart disease. Collectively, these results indicate that clinical measures related to exercise, especially maximum heart rate, ST slope, and exercise-induced angina, are among the most informative markers for heart disease in this data set.*
+
